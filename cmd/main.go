@@ -1,66 +1,74 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/jmjac/overDrawer/blockchain"
+	"github.com/jmjac/overDrawer/postgres"
 	"github.com/jmjac/overDrawer/rest"
+	"github.com/jmjac/overDrawer/store"
 	"github.com/jmjac/vrscClient"
 )
 
 func main() {
 	pass := os.Getenv("vrscPass")
-	verus := vrscClient.New("client", pass)
-	bc, err := verus.GetBlockCount()
-	if err != nil {
-		fmt.Println(err)
-	}
+	client := os.Getenv("vrscClient")
+	verus := vrscClient.New(client, pass)
 
-	fmt.Println(bc)
-	state, err := blockchain.LoadBlockchainState("state.json")
-	state.SetBlockchain(verus)
-	state.GetLockedIdentities()
-	//state.SaveToDisk("state.json")
+	var startNew bool
+	var serverPort int
+	flag.BoolVar(&startNew, "new", false, "Start the scan from 0. You need to clean the stored blocks before running it")
+	flag.IntVar(&serverPort, "p", 8080, "Listening port for the server")
+	flag.Parse()
+	port := ":" + strconv.Itoa(serverPort)
 
-	fmt.Println(state.CalculateStats())
-	//state := blockchain.New(verus)
-
-	//TODO: Figure out how to stop this on command
-	//	go state.Scan()
-	//now := time.Now()
-	//fmt.Println(state.TransactionsInLastBlocks(60 * 24 * 30))
-	//fmt.Println(time.Since(now))
-
-	//TODO: Put it into an sql databse, instead of memory
-	//fmt.Println(len(state.Blocks))
-	//state.CreateTransactionHistory()
-	//fmt.Println(len(state.Blocks))
-	//state.SaveToDisk("texxt.txt")
-	//locked := state.GetLockedIdentities()
-	//fmt.Println(len(locked))
+	//Check if the coin deamon is running
+	_, err := verus.GetBlockCount()
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("Identities:", len(state.Identities))
-	s := rest.NewServer(":8081", &verus, &state)
+
+	//TODO: Change to env variable
+	user := "overdrawer"
+	password := "s9471923uhdasujdh9u12jueh19e2"
+	dbname := "overdrawer"
+
+	//Setup the data storage
+	psql, err := postgres.Open(user, password, dbname)
+	if err != nil {
+		log.Fatal(err)
+	}
+	store := store.New(psql)
+
+	filename := "state2.json"
+	var state blockchain.BlockchainState
+	if startNew {
+		state = blockchain.New(verus, &store, filename)
+	} else {
+		state, err = blockchain.LoadBlockchainState(filename, verus, &store)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	fmt.Println(store)
+	state.SetBlockchain(verus)
+	state.CalculateStats()
+	c := make(chan bool)
+	state.Scan(c)
+	state.SaveToDisk()
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("Identities:", len(state.Identities))
+	s := rest.NewServer(port, &verus, &state)
 	err = s.Run()
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	//identities := make([]string, 0)
-	//for i := range state.Identities {
-	//identities = append(identities, i)
-	//}
-
-	//updateIdentitiesList(verus, identities)
-
-	//ch := make(chan string, 10)
-	//go state.Scan(verus, bc, ch)
-
-	//time.Sleep(time.Second * 5)
-	//TODO: Change to update as summary every day
-	//updateIdentitesAndSendAlert(verus, identities, ch)
 }
