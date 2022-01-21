@@ -6,6 +6,7 @@ type Stats struct {
 	Week         Summary   `json:"week"`
 	Month        Summary   `json:"month"`
 	MonthPerHour []Summary `json:"month_per_hour"`
+	BlockCount   int       `json:"block_count"`
 }
 
 type Summary struct {

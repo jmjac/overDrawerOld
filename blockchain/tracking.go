@@ -2,7 +2,7 @@ package blockchain
 
 import (
 	"bufio"
-	"fmt"
+	"log"
 	"os"
 
 	"github.com/jmjac/vrscClient"
@@ -10,7 +10,7 @@ import (
 
 func exploreBlock(block *vrscClient.Block) {
 	checkForIdentitiesCreation(block)
-	fmt.Println("Block fee:", calculateBlockFee(block))
+	log.Println("Block fee:", calculateBlockFee(block))
 }
 
 func loadIdentitiesNames(filename string) (map[string]bool, error) {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jmjac/overDrawer/store"
 	"github.com/jmjac/vrscClient"
 )
 
@@ -13,23 +14,26 @@ type BlockchainState struct {
 	Identities       map[string]vrscClient.Identity
 	LockedIdentities []identityWithBalance
 	Height           int
-	LastBlocks       []vrscClient.Block
 	Stats            Stats
+	store            *store.Store
 	verus            vrscClient.Verus
+	filename         string
 }
 
-func New(verus vrscClient.Verus) BlockchainState {
+func New(verus vrscClient.Verus, store *store.Store, savefilename string) BlockchainState {
 	b := BlockchainState{}
 	b.Identities = make(map[string]vrscClient.Identity)
 	b.LockedIdentities = make([]identityWithBalance, 0)
-	b.LastBlocks = make([]vrscClient.Block, 0)
+	b.store = store
 	b.verus = verus
+	b.filename = savefilename
+	b.Stats = Stats{}
 	b.Height = 0
 	return b
 }
 
-func (b BlockchainState) SaveToDisk(filename string) error {
-	f, err := os.Create(filename)
+func (b BlockchainState) SaveToDisk() error {
+	f, err := os.Create(b.filename)
 	if err != nil {
 		return err
 	}
@@ -45,71 +49,81 @@ func (b *BlockchainState) SetBlockchain(verus vrscClient.Verus) {
 	b.verus = verus
 }
 
-func LoadBlockchainState(filename string) (BlockchainState, error) {
+func LoadBlockchainState(filename string, verus vrscClient.Verus, store *store.Store) (BlockchainState, error) {
 	f, err := os.ReadFile(filename)
 	if err != nil {
 		return BlockchainState{}, nil
 	}
 	var b BlockchainState
 	err = json.Unmarshal(f, &b)
+	b.filename = filename
+	b.verus = verus
+	b.store = store
 	return b, err
 }
 
-func (b *BlockchainState) Scan() error {
+func (b *BlockchainState) scanBlock() error {
+	log.Println("Block: ", b.Height)
+	block, err := b.verus.GetBlockFromHeight(b.Height)
+	if err != nil {
+		return err
+	}
+
+	for name := range checkForIdentitiesCreation(block) {
+		id, err := b.verus.GetIdentity(name + "@")
+		if err != nil {
+			log.Println("Error:", err)
+			log.Println("For identity:", name)
+		} else {
+			b.Identities[name] = *id
+		}
+
+	}
+	err = b.store.EnterBlock(block)
+	b.Height++
+	return err
+}
+
+func (b *BlockchainState) Scan(quit chan bool) {
 	for {
+		select {
+		case <-quit:
+			log.Println("Stopping blockchain scan")
+			b.SaveToDisk()
+			log.Println("State saved")
+			return
+		default:
+		}
+
 		top, _ := b.verus.GetBlockCount()
+		b.scanBlock()
 		saved := false
+
 		for b.Height == top {
-			//TODO: Change this
-			log.Println("Updating stats")
-			b.CalculateStats()
 			top, _ = b.verus.GetBlockCount()
-			time.Sleep(time.Second * 20)
 			if !saved {
+				log.Println("Updating stats")
+				b.CalculateStats()
 				log.Println("Saving state")
-				b.SaveToDisk("state.json")
+				b.SaveToDisk()
 				log.Println("State saved")
 				saved = true
 			}
+			select {
+
+			case <-quit:
+				log.Println("Stopping blockchain scan")
+				log.Println("Saving state")
+				b.SaveToDisk()
+				log.Println("State saved")
+				return
+			default:
+			}
+
 			log.Println("Sleeping")
+			time.Sleep(time.Second * 10)
 		}
 		saved = false
-
-		if b.Height%20000 == 0 {
-			log.Println("Saving state")
-			b.SaveToDisk("state.json")
-			log.Println("State saved")
-		}
-		log.Println("Block: ", b.Height)
-		block, err := b.verus.GetBlockFromHeight(b.Height)
-		b.LastBlocks = append(b.LastBlocks, *block)
-		if len(b.LastBlocks) > 60*24*30 {
-			b.LastBlocks = b.LastBlocks[1:]
-
-		}
-
-		if err != nil {
-			return err
-		}
-
-		for name := range checkForIdentitiesCreation(block) {
-			if _, ok := b.Identities[name]; !ok {
-				//ch <- identity
-			}
-
-			id, err := b.verus.GetIdentity(name + "@")
-			if err != nil {
-				log.Println("Error:", err)
-				log.Println("For identity:", name)
-			} else {
-
-				b.Identities[name] = *id
-			}
-
-		}
-		detectMoneyMovement(block)
-		calculateBlockFee(block)
-		b.Height++
 	}
 }
 
@@ -139,26 +153,25 @@ func (b *BlockchainState) GetLockedIdentities() []identityWithBalance {
 	return timeLocked
 }
 
-func (b *BlockchainState) TransactionsInLastBlocks(n int) int {
+func (b *BlockchainState) WriteLastNBlocksToDB(n int) int {
 	top, _ := b.verus.GetBlockCount()
 	txs := make([]vrscClient.Tx, 0)
-	blocks := make([]vrscClient.Block, 0)
 	for i := top - n; i < top; i++ {
 		block, err := b.verus.GetBlockFromHeight(i)
 		if err != nil {
 			log.Fatal(err)
 		}
-		blocks = append(blocks, *block)
+
 		for _, tx := range transactionInBlock(*block) {
 			txs = append(txs, tx)
 		}
 	}
-	b.LastBlocks = blocks
 	b.Height = top
 	return len(txs)
 }
 
 func transactionInBlock(block vrscClient.Block) []vrscClient.Tx {
+	//TODO: Change
 	txs := make([]vrscClient.Tx, 0)
 	for _, tx := range block.Tx {
 		coinbaseTx := false
@@ -176,42 +189,13 @@ func transactionInBlock(block vrscClient.Block) []vrscClient.Tx {
 }
 
 func (b *BlockchainState) CalculateStats() Stats {
+	//TODO: Implement
 	stats := Stats{}
-	monthPerHour := make([]Summary, 0)
-	for i, block := range b.LastBlocks {
-		movement := detectMoneyMovement(&block)
-		var totalMoved int64
-		for _, val := range movement {
-			totalMoved += val
-		}
-		count := len(movement)
-
-		//Month
-		stats.Month.MoneyMoved += totalMoved
-		stats.Month.TransactionCount += count
-		//Week
-		if i >= len(b.LastBlocks)-60*24*7 {
-			stats.Week.MoneyMoved += totalMoved
-			stats.Week.TransactionCount += count
-		}
-
-		//Day
-		if i >= len(b.LastBlocks)-60*24 {
-			stats.Day.MoneyMoved += totalMoved
-			stats.Day.TransactionCount += count
-		}
-
-		//Hour
-		if i >= len(b.LastBlocks)-60 {
-			stats.Hour.MoneyMoved += totalMoved
-			stats.Hour.TransactionCount += count
-		}
-		if i%60 == 0 && i != 0 {
-			monthPerHour = append(monthPerHour, Summary{count, totalMoved})
-		}
-
-	}
-	stats.MonthPerHour = monthPerHour
+	stats.Day = Summary{100, 1000}
+	stats.Hour = Summary{9900, 8300}
+	stats.Month = Summary{19500, 14320}
+	stats.Week = Summary{12100, 51000}
+	stats.BlockCount = b.Height
 	b.Stats = stats
 	return stats
 }
