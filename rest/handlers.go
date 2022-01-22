@@ -2,7 +2,6 @@ package rest
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 
@@ -19,8 +18,9 @@ func (s Server) handleIdentities(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
+	//TODO: Should be get, change in JS too
 	if r.Method != "POST" {
-		fmt.Println("ERROR")
+		log.Println("ERROR")
 
 	}
 	type temp struct {
@@ -32,7 +32,7 @@ func (s Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	var t temp
 	err := decoder.Decode(&t)
-	fmt.Println(t.Identity)
+	//log.Println(t.Identity)
 	identity := t.Identity
 	if err != nil {
 		log.Println(err)
@@ -40,7 +40,8 @@ func (s Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if identity == "" {
+	//TODO: This limit may be too low for some identities, check in documentation
+	if len(identity) == 0 || len(identity) > 25 {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -96,6 +97,10 @@ func (s Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Write(out)
+}
+
+func (s Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	s.terminate <- true
 }
 
 func updateIdentitesAndSendAlert(verus vrscClient.Verus, identities []string, ch chan string) ([]string, error) {

@@ -6,4 +6,5 @@ func (s Server) routes() {
 	s.router.HandleFunc("/identity", s.logging(s.handleIdentity))
 	s.router.HandleFunc("/blockcount", s.logging(s.handleBlockCount))
 	s.router.HandleFunc("/lockedidentities", s.logging(s.handleLockedIdentities))
+	//s.router.HandleFunc("/stop", s.logging(s.handleStop))
 }
