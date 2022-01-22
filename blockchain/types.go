@@ -1,15 +1,16 @@
 package blockchain
 
 type Stats struct {
-	Hour         Summary   `json:"hour"`
-	Day          Summary   `json:"day"`
-	Week         Summary   `json:"week"`
-	Month        Summary   `json:"month"`
-	MonthPerHour []Summary `json:"month_per_hour"`
-	BlockCount   int       `json:"block_count"`
+	Hour        Summary   `json:"hour"`
+	Day         Summary   `json:"day"`
+	Week        Summary   `json:"week"`
+	Month       Summary   `json:"month"`
+	Year        Summary   `json:"year"`
+	YearPerHour []Summary `json:"year_per_hour"`
+	BlockCount  int       `json:"block_count"`
 }
 
 type Summary struct {
-	TransactionCount int   `json:"transaction_count"`
-	MoneyMoved       int64 `json:"money_moved"`
+	TxCount int64 `json:"tx_count"`
+	Value   int64 `json:"value"`
 }
