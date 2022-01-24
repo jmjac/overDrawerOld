@@ -17,16 +17,22 @@ func New(db *sql.DB) Store {
 	return d
 }
 
+func (s Store) EnterBlock(height, txCount, valueTotal, minedCoins, blockFee int64, blockHash string) error {
+	stmt := `INSERT INTO blocks (height, tx_count, value_total, mined_coins, block_fee, block_hash) VALUES ( $1, $2, $3, $4, $5, $6 )`
+	_, err := s.db.Exec(stmt, height, txCount, valueTotal, minedCoins, blockFee, blockHash)
+	return err
+}
+
 //Save the block, transactions and transaction address mapping to databse
-func (s Store) EnterBlock(block *vrscClient.Block) error {
-	//TODO: Fix repeated blocks
+func (s Store) oldEnterBlock(block *vrscClient.Block) error {
+	//TODO: Fix non-standard TX
+	var height int64
+	var hash string
 	query := "SELECT height, block_hash from blocks where height = $1"
 	rows, err := s.db.Query(query, block.Height)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	var height int64
-	var hash string
 	defer rows.Close()
 	for rows.Next() {
 		rows.Scan(&height, &hash)
@@ -35,7 +41,10 @@ func (s Store) EnterBlock(block *vrscClient.Block) error {
 			return nil
 		} else {
 			log.Println("STORE: Repeated height, wrong hash. Removing all wrong blocks from db", hash, block.Hash)
-			s.RemoveBlocksByHeight(block.Height)
+			err := s.RemoveByHeight(block.Height)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -69,6 +78,9 @@ func (s Store) EnterBlock(block *vrscClient.Block) error {
 			}
 
 			for _, address := range vout.ScriptPubKey.Addresses {
+				if address == "" {
+					continue
+				}
 				if _, ok := addressesInOut[address]; !ok {
 					addressesInOut[address] = make([]bool, 2, 2)
 				}
@@ -89,14 +101,14 @@ func (s Store) EnterBlock(block *vrscClient.Block) error {
 			valueTotal += valueTx
 		}
 		for address, v := range addressesInOut {
-			err := s.mapTransactionAddress(tx.Txid, address, v[0], v[1], block.Hash)
+			err := s.MapTransactionAddress(tx.Txid, address, v[0], v[1], block.Hash, block.Height)
 			if err != nil {
-				log.Fatal("STORE: When mapping addresses got:", err)
+				return err
 			}
 		}
-		err := s.enterTransaction(tx.Txid, len(tx.Vin), len(tx.Vout), txFee, block.Hash, valueTx)
+		err := s.EnterTransaction(tx.Txid, len(tx.Vin), len(tx.Vout), txFee, block.Hash, valueTx, block.Height)
 		if err != nil {
-			log.Fatalf("STORE: Got %v in block: %v Tx: %v", err, block.Hash, tx.Txid)
+			return err
 		}
 	}
 
@@ -105,7 +117,29 @@ func (s Store) EnterBlock(block *vrscClient.Block) error {
 	return err
 }
 
-func (s Store) RemoveBlocksByHeight(height int64) {
+func (s Store) RemoveByHeight(height int64) error {
+	queryBlocks := "DELETE FROM blocks WHERE height >= $1"
+	queryTransactions := "DELETE FROM transactions WHERE height >= $1"
+	queryAddresses := "DELETE FROM address_transaction WHERE height >= $1"
+	_, err := s.db.Exec(queryBlocks, height)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(queryTransactions, height)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec(queryAddresses, height)
+	if err != nil {
+		return err
+	}
+	return nil
+
+}
+
+func (s Store) removeBlocksByHeight(height int64) {
+	//TODO: Rewrite to use height for faster queries
 	query := "SELECT block_hash FROM blocks WHERE height >= $1"
 	rows, err := s.db.Query(query, height)
 	if err != nil {
@@ -115,13 +149,13 @@ func (s Store) RemoveBlocksByHeight(height int64) {
 	for rows.Next() {
 		rows.Scan(&deleteHash)
 		log.Println("STORE: Removing block: ", deleteHash)
-		s.RemoveBlock(deleteHash)
+		s.removeBlock(deleteHash)
 	}
 	rows.Close()
 }
 
 //Should remove block from blocks. Transactions from this block from transactions and transaction ids from transaction_address
-func (s Store) RemoveBlock(blockHash string) {
+func (s Store) removeBlock(blockHash string) {
 	queryBlocks := "DELETE FROM blocks WHERE block_hash = $1"
 	queryTransactions := "DELETE FROM transactions WHERE block_hash = $1"
 	queryAddresses := "DELETE FROM address_transaction WHERE block_hash = $1"
@@ -142,20 +176,43 @@ func (s Store) RemoveBlock(blockHash string) {
 	}
 }
 
-func (s Store) enterTransaction(txHash string, numVin, numVout int, txFee int64, blockHash string, value int64) error {
-	stmt := `INSERT INTO transactions (tx_hash, num_vin, num_vout, tx_fee, block_hash, value) VALUES ( $1, $2, $3, $4, $5, $6 )`
-	_, err := s.db.Exec(stmt, txHash, numVin, numVout, txFee, blockHash, value)
+func (s Store) EnterTransaction(txHash string, numVin, numVout int, txFee int64, blockHash string, value int64, height int64) error {
+	stmt := `INSERT INTO transactions (tx_hash, num_vin, num_vout, tx_fee, block_hash, value, height) VALUES ( $1, $2, $3, $4, $5, $6, $7 )`
+	_, err := s.db.Exec(stmt, txHash, numVin, numVout, txFee, blockHash, value, height)
 	return err
 }
 
-func (s Store) mapTransactionAddress(txHash, address string, vin, vout bool, blockHash string) error {
-	stmt := "INSERT INTO address_transaction (address, transaction_hash, vin, vout, block_hash) VALUES ( $1, $2, $3, $4, $5 )"
-	_, err := s.db.Exec(stmt, address, txHash, vin, vout, blockHash)
+func (s Store) EnterIdentity(name, address string, height int64, blockHash string) error {
+	stmt := `INSERT INTO identities (name, address, height, block_hash) VALUES ( $1, $2, $3, $4)`
+	_, err := s.db.Exec(stmt, name, address, height, blockHash)
+	return err
+
+}
+
+func (s Store) MapTransactionAddress(txHash, address string, vin, vout bool, blockHash string, height int64) error {
+	stmt := "INSERT INTO address_transaction (address, transaction_hash, vin, vout, height, block_hash) VALUES ( $1, $2, $3, $4, $5, $6 )"
+	_, err := s.db.Exec(stmt, address, txHash, vin, vout, height, blockHash)
 	return err
 }
 
-func (s Store) GetBlock(blockHash string) {
+func (s Store) GetTopBlock() (int, string) {
+	query := "SELECT height, block_hash FROM blocks ORDER BY height DESC LIMIT 1"
+	row := s.db.QueryRow(query)
+	var height int
+	var hash string
+	row.Scan(&height, &hash)
+	return height, hash
+}
 
+func (s Store) GetBlockHash(height int64) (string, error) {
+	var blockHash string
+	query := "SELECT block_hash from blocks where height = $1"
+	row := s.db.QueryRow(query, height)
+	err := row.Scan(&blockHash)
+	if err != nil {
+		return "", err
+	}
+	return blockHash, nil
 }
 
 type blockSummary struct {
