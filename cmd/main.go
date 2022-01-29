@@ -15,9 +15,10 @@ import (
 )
 
 func main() {
-	pass := os.Getenv("vrscPass")
+	vrscPass := os.Getenv("vrscPass")
 	client := os.Getenv("vrscClient")
-	verus := vrscClient.New(client, pass)
+	vrscAddr := os.Getenv("vrscAddr")
+	verus := vrscClient.New(vrscAddr, client, vrscPass)
 
 	var startNew bool
 	var serverPort int
@@ -32,40 +33,31 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//TODO: Change to env variable
-	user := "overdrawer"
-	password := "s9471923uhdasujdh9u12jueh19e2"
-	dbname := "overdrawer"
+	dbUser := os.Getenv("dbUser")
+	dbPass := os.Getenv("dbPass")
+	dbName := os.Getenv("dbName")
 
 	//Setup the data storage
-	psql, err := postgres.Open(user, password, dbname)
+	psql, err := postgres.Open(dbUser, dbPass, dbName)
 	if err != nil {
 		log.Fatal(err)
 	}
 	store := store.New(psql)
 
-	filename := "state2.json"
 	var state blockchain.BlockchainState
+	//TODO: Rewrite
 	if startNew {
-		state = blockchain.New(verus, &store, filename)
+		state = blockchain.New(verus, &store)
 	} else {
-		state, err = blockchain.LoadBlockchainState(filename, verus, &store)
+		state = blockchain.LoadBlockchainState(verus, &store)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	fmt.Println(store)
-	state.SetBlockchain(verus)
-	state.CalculateStats()
-	c := make(chan bool)
-	state.Scan(c)
-	state.SaveToDisk()
-
-	if err != nil {
-		log.Fatal(err)
-	}
+	fmt.Println("Calculating stats")
 	log.Println("Identities:", len(state.Identities))
+
 	s := rest.NewServer(port, &verus, &state)
 	err = s.Run()
 	if err != nil {
