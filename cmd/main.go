@@ -22,8 +22,10 @@ func main() {
 
 	var startNew bool
 	var serverPort int
+	var dbPort int
 	flag.BoolVar(&startNew, "new", false, "Start the scan from 0. You need to clean the stored blocks before running it")
 	flag.IntVar(&serverPort, "p", 8080, "Listening port for the server")
+	flag.IntVar(&dbPort, "p", 5432, "Port for db")
 	flag.Parse()
 	port := ":" + strconv.Itoa(serverPort)
 
@@ -36,9 +38,10 @@ func main() {
 	dbUser := os.Getenv("dbUser")
 	dbPass := os.Getenv("dbPass")
 	dbName := os.Getenv("dbName")
+	dbHost := os.Getenv("dbHost")
 
 	//Setup the data storage
-	psql, err := postgres.Open(dbUser, dbPass, dbName)
+	psql, err := postgres.Open(dbUser, dbPass, dbName, dbHost, dbPort)
 	if err != nil {
 		log.Fatal(err)
 	}

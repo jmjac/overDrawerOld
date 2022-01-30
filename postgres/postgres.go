@@ -7,19 +7,11 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const (
-	host     = "localhost"
-	port     = 5432
-	user     = "organizerDB"
-	password = "tester"
-	dbname   = "organizerDB"
-)
-
-func Open(dbName string) (*sql.DB, error) {
+func Open(user, password, dbName, host string, port int) (*sql.DB, error) {
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
 		"password=%s dbname=%s sslmode=disable",
-		host, port, user, password, dbname)
+		host, port, user, password, dbName)
 
-	db, err := sql.Open(dbName, psqlInfo)
+	db, err := sql.Open("postgres", psqlInfo)
 	return db, err
 }
