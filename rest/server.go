@@ -34,7 +34,7 @@ func NewServer(addr string, verus *vrscClient.Verus, state *blockchain.Blockchai
 }
 
 func (s Server) Run() error {
-	log.Printf("SERVER: Starting server at %v\n", s.server.Addr)
+	log.Printf("Starting server at %v\n", s.server.Addr)
 	//TODO: Add TSL later
 	err := s.server.ListenAndServe()
 	return err
