@@ -1,6 +1,7 @@
 FROM golang
 
+WORKDIR server
 COPY . .
-RUN chmod +x run.sh
 
-CMD ./run.sh
+CMD ["./overDrawerBackend", "-p", "9090"]
+

@@ -1,9 +1,7 @@
 package blockchain
 
 import (
-	"encoding/json"
 	"log"
-	"os"
 	"time"
 
 	"github.com/jmjac/overDrawer/store"
@@ -13,7 +11,7 @@ import (
 type BlockchainState struct {
 	Identities       map[string]vrscClient.Identity `json:"-"`
 	LockedIdentities []identityWithBalance          `json:"-"`
-	Height           int
+	Height           int64
 	BlockHash        string
 	Stats            Stats     `json:"-"`
 	StatsPerHour     []Summary `json:"-"`
@@ -31,19 +29,6 @@ func New(verus vrscClient.Verus, store *store.Store) BlockchainState {
 	b.Stats = Stats{}
 	b.Height = 0
 	return b
-}
-
-func (b BlockchainState) saveToDisk() error {
-	f, err := os.Create("delete.txt")
-	if err != nil {
-		return err
-	}
-	out, err := json.Marshal(b)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(out)
-	return err
 }
 
 func (b *BlockchainState) SetBlockchain(verus vrscClient.Verus) {
@@ -64,8 +49,8 @@ func LoadBlockchainState(verus vrscClient.Verus, store *store.Store) BlockchainS
 		if err != nil {
 			log.Fatal(err)
 		}
-		log.Println("Block hash in store is different the on chain block hash. Removing block:", height)
-		height--
+		log.Println("Block hash in store is different then on chain block hash. Removing block:", height)
+		height, hash = b.store.GetTopBlock()
 		blockHash, _ = verus.GetBlockHash(height)
 	}
 	b.Height = height
@@ -73,9 +58,9 @@ func LoadBlockchainState(verus vrscClient.Verus, store *store.Store) BlockchainS
 }
 
 //Save the block, transactions and transaction address mapping to databse
-func (b *BlockchainState) enterBlock(blockHeight int) (string, error) {
+func (b *BlockchainState) enterBlock(blockHeight int64) (string, error) {
 	//TODO: Fix non-standard TX
-	log.Println("Block: ", blockHeight)
+	//Slow??
 	block, err := b.verus.GetBlockFromHeight(blockHeight)
 	if err != nil {
 		return "", err
@@ -85,12 +70,14 @@ func (b *BlockchainState) enterBlock(blockHeight int) (string, error) {
 	//if Block is in the db
 	if err == nil {
 		if block.Hash == hash {
-			log.Println("STORE: Block already in databse", block.Height)
+			log.Println("Block already in databse", block.Height)
+			b.Height++
 			return block.Hash, nil
 
 		} else {
-			log.Println("STORE: Repeated height, wrong hash. Removing all wrong blocks from db", hash, block.Hash)
+			log.Println("Repeated height, wrong hash. Removing all wrong blocks from db", hash, block.Hash)
 			err := b.store.RemoveByHeight(block.Height)
+			b.Height--
 			if err != nil {
 				return "", err
 			}
@@ -173,6 +160,8 @@ func (b *BlockchainState) enterBlock(blockHeight int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	log.Println("Block:", b.Height)
+	b.Height++
 	return block.Hash, nil
 }
 
@@ -196,11 +185,11 @@ func (b *BlockchainState) Scan(quit chan bool) {
 		}
 		hash, err := b.enterBlock(b.Height)
 		if err != nil {
-			log.Fatal("BLOCKSTATE:", err)
+			log.Fatal(err)
 		}
-		b.Height++
+
 		b.BlockHash = hash
-		if b.Height%10 == 0 {
+		if b.Height%200 == 0 {
 			log.Println("Updating stats")
 			b.CalculateStats()
 		}
@@ -233,12 +222,12 @@ func (b *BlockchainState) GetLockedIdentities() []identityWithBalance {
 	return timeLocked
 }
 
-func (b *BlockchainState) DeleteBlocks(n int) {
+func (b *BlockchainState) DeleteBlocks(n int64) {
 	top, _ := b.verus.GetBlockCount()
-	b.store.RemoveByHeight(int64(top - n))
+	b.store.RemoveByHeight(top - n)
 }
 
-func (b *BlockchainState) WriteLastNBlocksToDB(n int) {
+func (b *BlockchainState) WriteLastNBlocksToDB(n int64) {
 	top, _ := b.verus.GetBlockCount()
 	for i := top - n; i < top; i++ {
 		b.enterBlock(i)

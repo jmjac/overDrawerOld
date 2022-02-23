@@ -1,4 +1,4 @@
-package blockchain
+package btcState
 
 type Stats struct {
 	Hour       Summary `json:"hour"`
@@ -10,6 +10,6 @@ type Stats struct {
 }
 
 type Summary struct {
-	TxCount int64 `json:"tx_count"`
-	Value   int64 `json:"value"`
+	TxCount int64   `json:"tx_count"`
+	Value   float64 `json:"value"`
 }

@@ -4,8 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-
-	"github.com/jmjac/vrscClient"
 )
 
 type Store struct {
@@ -13,7 +11,8 @@ type Store struct {
 }
 
 func New(db *sql.DB) Store {
-	d := Store{db}
+	d := Store{}
+	d.db = db
 	return d
 }
 
@@ -23,97 +22,9 @@ func (s Store) EnterBlock(height, txCount, valueTotal, minedCoins, blockFee int6
 	return err
 }
 
-//Save the block, transactions and transaction address mapping to databse
-func (s Store) oldEnterBlock(block *vrscClient.Block) error {
-	//TODO: Fix non-standard TX
-	var height int64
-	var hash string
-	query := "SELECT height, block_hash from blocks where height = $1"
-	rows, err := s.db.Query(query, block.Height)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		rows.Scan(&height, &hash)
-		if hash == block.Hash {
-			log.Println("STORE: Block already in databse", block.Height)
-			return nil
-		} else {
-			log.Println("STORE: Repeated height, wrong hash. Removing all wrong blocks from db", hash, block.Hash)
-			err := s.RemoveByHeight(block.Height)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	var valueTotal int64
-	var blockFee int64
-	var minedCoins int64
-	txCount := len(block.Tx)
-	for _, tx := range block.Tx {
-		coinbaseTx := false
-		var txFee int64
-		var valueTx int64
-		addressesInOut := make(map[string][]bool)
-		for _, vin := range tx.Vin {
-			if vin.Coinbase != "" {
-				coinbaseTx = true
-			}
-			valueTx += vin.ValueSat
-			txFee += vin.ValueSat
-
-			if _, ok := addressesInOut[vin.Address]; !ok {
-				addressesInOut[vin.Address] = make([]bool, 2, 2)
-			}
-			addressesInOut[vin.Address][0] = true
-		}
-
-		for _, vout := range tx.Vout {
-			if coinbaseTx {
-				minedCoins += vout.ValueSat
-			} else {
-				txFee -= vout.ValueSat
-			}
-
-			for _, address := range vout.ScriptPubKey.Addresses {
-				if address == "" {
-					continue
-				}
-				if _, ok := addressesInOut[address]; !ok {
-					addressesInOut[address] = make([]bool, 2, 2)
-				}
-				addressesInOut[address][1] = true
-			}
-		}
-
-		for _, vjs := range tx.Vjoinsplit {
-			valueTx -= vjs.VpubNew
-
-		}
-
-		//Fix for transactions with no inputs from
-		if txFee > 0 {
-			blockFee += txFee
-		}
-		if valueTx > 0 {
-			valueTotal += valueTx
-		}
-		for address, v := range addressesInOut {
-			err := s.MapTransactionAddress(tx.Txid, address, v[0], v[1], block.Hash, block.Height)
-			if err != nil {
-				return err
-			}
-		}
-		err := s.EnterTransaction(tx.Txid, len(tx.Vin), len(tx.Vout), txFee, block.Hash, valueTx, block.Height)
-		if err != nil {
-			return err
-		}
-	}
-
+func (s Store) EnterBTCBlock(height, txCount int64, valueTotal, minedCoins, blockFee float64, blockHash string) error {
 	stmt := `INSERT INTO blocks (height, tx_count, value_total, mined_coins, block_fee, block_hash) VALUES ( $1, $2, $3, $4, $5, $6 )`
-	_, err = s.db.Exec(stmt, block.Height, txCount, valueTotal, minedCoins, blockFee, block.Hash)
+	_, err := s.db.Exec(stmt, height, txCount, valueTotal, minedCoins, blockFee, blockHash)
 	return err
 }
 
@@ -182,6 +93,12 @@ func (s Store) EnterTransaction(txHash string, numVin, numVout int, txFee int64,
 	return err
 }
 
+func (s Store) EnterBTCTransaction(txHash string, numVin, numVout int, txFee float64, blockHash string, value float64, height int64) error {
+	stmt := `INSERT INTO transactions (tx_hash, num_vin, num_vout, tx_fee, block_hash, value, height) VALUES ( $1, $2, $3, $4, $5, $6, $7 )`
+	_, err := s.db.Exec(stmt, txHash, numVin, numVout, txFee, blockHash, value, height)
+	return err
+}
+
 func (s Store) EnterIdentity(name, address string, height int64, blockHash string) error {
 	stmt := `INSERT INTO identities (name, address, height, block_hash) VALUES ( $1, $2, $3, $4)`
 	_, err := s.db.Exec(stmt, name, address, height, blockHash)
@@ -192,13 +109,14 @@ func (s Store) EnterIdentity(name, address string, height int64, blockHash strin
 func (s Store) MapTransactionAddress(txHash, address string, vin, vout bool, blockHash string, height int64) error {
 	stmt := "INSERT INTO address_transaction (address, transaction_hash, vin, vout, height, block_hash) VALUES ( $1, $2, $3, $4, $5, $6 )"
 	_, err := s.db.Exec(stmt, address, txHash, vin, vout, height, blockHash)
+
 	return err
 }
 
-func (s Store) GetTopBlock() (int, string) {
+func (s Store) GetTopBlock() (int64, string) {
 	query := "SELECT height, block_hash FROM blocks ORDER BY height DESC LIMIT 1"
 	row := s.db.QueryRow(query)
-	var height int
+	var height int64
 	var hash string
 	row.Scan(&height, &hash)
 	return height, hash
@@ -222,7 +140,7 @@ type blockSummary struct {
 	MinedCoins int64
 }
 
-func (s Store) GetBlocks(start, end int) ([]*blockSummary, error) {
+func (s Store) GetBlocks(start, end int64) ([]*blockSummary, error) {
 	query := "SELECT height, value_total, mined_coins, tx_count from blocks where height >= $1 AND height <= $2 ORDER BY height ASC"
 	rows, err := s.db.Query(query, start, end)
 	defer rows.Close()
@@ -234,6 +152,35 @@ func (s Store) GetBlocks(start, end int) ([]*blockSummary, error) {
 
 	for rows.Next() {
 		bs := &blockSummary{}
+		err := rows.Scan(&bs.Height, &bs.ValueTotal, &bs.MinedCoins, &bs.TxCount)
+		if err != nil {
+			log.Fatal(err)
+		}
+		blocksSummaries = append(blocksSummaries, bs)
+	}
+
+	return blocksSummaries, nil
+}
+
+type blockSummaryBTC struct {
+	Height     int64
+	ValueTotal float64
+	TxCount    int64
+	MinedCoins float64
+}
+
+func (s Store) GetBTCBlocks(start, end int64) ([]*blockSummaryBTC, error) {
+	query := "SELECT height, value_total, mined_coins, tx_count from blocks where height >= $1 AND height <= $2 ORDER BY height ASC"
+	rows, err := s.db.Query(query, start, end)
+	defer rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	var blocksSummaries []*blockSummaryBTC
+
+	for rows.Next() {
+		bs := &blockSummaryBTC{}
 		err := rows.Scan(&bs.Height, &bs.ValueTotal, &bs.MinedCoins, &bs.TxCount)
 		if err != nil {
 			log.Fatal(err)
